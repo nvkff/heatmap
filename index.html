@@ -19,7 +19,6 @@
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" />
 
     <style>
-        /* (стили такие же, как в последней версии) */
         * {
             margin: 0;
             padding: 0;
@@ -516,7 +515,6 @@
         (function() {
             'use strict';
 
-            // Глобальное состояние для отладки
             window._state = {
                 tracks: [],
                 heatLayer: null,
@@ -937,40 +935,30 @@
                 }
             }
 
-            // ----- Автоматическая загрузка всех файлов из папки tracks/ -----
-            async function loadAllFilesFromTracks() {
-                const baseUrl = window.location.origin + '/heatmap/tracks/';
-
-                // Сначала пробуем загрузить список файлов через HTML-парсинг
+            // ----- Автоматическая загрузка GPX из папки tracks/ -----
+            async function loadGpxFromTracks() {
                 try {
-                    const response = await fetch('/heatmap/tracks/');
+                    // Пробуем получить список файлов через GitHub API (более надёжно)
+                    const apiUrl = 'https://api.github.com/repos/nvkff/heatmap/contents/tracks';
+                    const response = await fetch(apiUrl);
                     if (response.ok) {
-                        const html = await response.text();
-                        const parser = new DOMParser();
-                        const doc = parser.parseFromString(html, 'text/html');
-                        const links = doc.querySelectorAll('a');
-
-                        const filesToLoad = [];
-                        for (const link of links) {
-                            const href = link.getAttribute('href');
-                            if (!href || href.includes('/..') || href.includes('?')) continue;
-                            const fileName = decodeURIComponent(href);
-                            if (fileName.endsWith('.zip') || fileName.endsWith('.gpx') || fileName.endsWith('.xml')) {
-                                filesToLoad.push(fileName);
-                            }
-                        }
-
-                        if (filesToLoad.length > 0) {
-                            console.log(`🔍 Найдено файлов в tracks/: ${filesToLoad.length}`);
-                            for (const fileName of filesToLoad) {
-                                const url = baseUrl + fileName;
-                                console.log(`📥 Загрузка: ${fileName}`);
+                        const files = await response.json();
+                        const gpxFiles = files.filter(f =>
+                            f.name.toLowerCase().endsWith('.gpx') ||
+                            f.name.toLowerCase().endsWith('.xml')
+                        );
+                        console.log(`🔍 Найдено GPX-файлов: ${gpxFiles.length}`);
+                        for (const file of gpxFiles) {
+                            console.log(`📥 Загрузка: ${file.name}`);
+                            const downloadUrl = file.download_url;
+                            if (downloadUrl) {
                                 try {
-                                    const resp = await fetch(url);
+                                    const resp = await fetch(downloadUrl);
                                     if (resp.ok) {
                                         const blob = await resp.blob();
-                                        const file = new File([blob], fileName);
-                                        processFiles([file]);
+                                        const fileObj = new File([blob], file.name, { type: 'text/xml' });
+                                        // Добавляем в очередь на обработку
+                                        processFiles([fileObj]);
                                         // Ждём обработки
                                         await new Promise(resolve => {
                                             const check = setInterval(() => {
@@ -982,49 +970,58 @@
                                         });
                                     }
                                 } catch (e) {
-                                    console.warn(`⚠️ Не удалось загрузить ${fileName}`);
+                                    console.warn(`⚠️ Не удалось загрузить ${file.name}`);
                                 }
                             }
-                            console.log(`✅ Загружено ${filesToLoad.length} файлов`);
-                            return;
+                        }
+                        return;
+                    }
+                } catch (e) {
+                    console.warn('GitHub API не доступен, пробуем HTML-парсинг');
+                }
+
+                // Fallback: HTML-парсинг страницы папки
+                try {
+                    const response = await fetch('/heatmap/tracks/');
+                    if (!response.ok) {
+                        console.warn('Не удалось получить список файлов через HTML');
+                        return;
+                    }
+                    const html = await response.text();
+                    const parser = new DOMParser();
+                    const doc = parser.parseFromString(html, 'text/html');
+                    const links = doc.querySelectorAll('a');
+                    const baseUrl = window.location.origin + '/heatmap/tracks/';
+
+                    for (const link of links) {
+                        const href = link.getAttribute('href');
+                        if (!href) continue;
+                        const fileName = decodeURIComponent(href);
+                        if (fileName.endsWith('.gpx') || fileName.endsWith('.xml')) {
+                            console.log(`📥 Загрузка: ${fileName}`);
+                            const url = baseUrl + fileName;
+                            try {
+                                const resp = await fetch(url);
+                                if (resp.ok) {
+                                    const blob = await resp.blob();
+                                    const fileObj = new File([blob], fileName, { type: 'text/xml' });
+                                    processFiles([fileObj]);
+                                    await new Promise(resolve => {
+                                        const check = setInterval(() => {
+                                            if (!isProcessing && processingQueue.length === 0) {
+                                                clearInterval(check);
+                                                resolve();
+                                            }
+                                        }, 200);
+                                    });
+                                }
+                            } catch (e) {
+                                console.warn(`⚠️ Не удалось загрузить ${fileName}`);
+                            }
                         }
                     }
                 } catch (e) {
-                    console.warn('Не удалось получить список файлов через HTML');
-                }
-
-                // Fallback: пробуем стандартные имена
-                console.log('🔍 Пробуем стандартные имена...');
-                const fallbackNames = [
-                    'tracks_part_1.zip', 'tracks_part_2.zip', 'tracks_part_3.zip', 'tracks_part_4.zip',
-                    'tracks_part_5.zip', 'tracks_part_6.zip', 'tracks_part_7.zip', 'tracks_part_8.zip',
-                    'tracks_part_9.zip', 'tracks_part_10.zip',
-                    'tracks.zip', 'treks.zip', 'gpx.zip', 'archive.zip',
-                    'tracks.gpx', 'track.gpx', 'activities.gpx'
-                ];
-
-                for (const name of fallbackNames) {
-                    const url = baseUrl + name;
-                    try {
-                        const resp = await fetch(url, { method: 'HEAD' });
-                        if (resp.ok) {
-                            console.log(`📦 Найден файл: ${name}`);
-                            const blobResp = await fetch(url);
-                            if (blobResp.ok) {
-                                const blob = await blobResp.blob();
-                                const file = new File([blob], name);
-                                processFiles([file]);
-                                await new Promise(resolve => {
-                                    const check = setInterval(() => {
-                                        if (!isProcessing && processingQueue.length === 0) {
-                                            clearInterval(check);
-                                            resolve();
-                                        }
-                                    }, 200);
-                                });
-                            }
-                        }
-                    } catch (e) { /* пропускаем */ }
+                    console.warn('Не удалось загрузить файлы:', e);
                 }
             }
 
@@ -1067,7 +1064,8 @@
             setMode('tracks');
             renderFileList();
 
-            setTimeout(loadAllFilesFromTracks, 800);
+            // Автоматическая загрузка GPX из папки tracks/
+            setTimeout(loadGpxFromTracks, 800);
         })();
     </script>
 </body>
