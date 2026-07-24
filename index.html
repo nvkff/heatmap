@@ -652,7 +652,6 @@
                 }
 
                 let weightedPoints;
-                // Одинаковые радиус и размытие для обоих режимов
                 const radius = 24;
                 const blur = 15;
 
@@ -667,7 +666,6 @@
                         });
                     });
                 } else {
-                    // Нормализованный вес для режима "по точкам"
                     const normWeight = (state.tracks.length / allPoints.length) * 3;
                     weightedPoints = allPoints.map(([lat, lng]) => [lat, lng, normWeight]);
                 }
@@ -823,7 +821,7 @@
                 return div.innerHTML;
             }
 
-            // ----- Обработка файлов (общая для загрузки из файлов и из URL) -----
+            // ----- Обработка файлов -----
             function processFiles(files) {
                 const validFiles = Array.from(files).filter(f =>
                     f.name.toLowerCase().endsWith('.gpx') ||
@@ -977,11 +975,69 @@
                 countNext();
             }
 
-            // ----- Автоматическая загрузка любого ZIP из папки tracks/ -----
-            function loadFirstZipFromTracks() {
-                // Пытаемся получить список файлов в папке tracks через index (не всегда работает)
-                // Проще: пробуем стандартные имена, а если нет — ничего не загружаем
-                // Но мы можем попробовать fetch с проверкой на 404 для нескольких вариантов
+            // ----- Автоматическая загрузка ВСЕХ ZIP из папки tracks/ -----
+            async function loadAllZipsFromTracks() {
+                try {
+                    // Получаем список файлов через GitHub API
+                    const response = await fetch('/heatmap/tracks/?');
+                    if (!response.ok) {
+                        console.log('Не удалось получить список файлов через API');
+                        // Пробуем загрузить файлы по одному через стандартные имена
+                        tryFallback();
+                        return;
+                    }
+
+                    const html = await response.text();
+                    // Парсим HTML-страницу списка файлов (GitHub показывает список)
+                    const parser = new DOMParser();
+                    const doc = parser.parseFromString(html, 'text/html');
+                    
+                    // Ищем ссылки на файлы с расширением .zip
+                    const links = doc.querySelectorAll('a[href$=".zip"], a[href$=".ZIP"]');
+                    const zipUrls = [];
+                    links.forEach(link => {
+                        const href = link.getAttribute('href');
+                        // Проверяем, что это относительный путь к файлу (не родительская папка)
+                        if (href && !href.includes('/..') && !href.includes('?') && !href.includes('#')) {
+                            zipUrls.push('/heatmap/tracks/' + href);
+                        }
+                    });
+
+                    if (zipUrls.length === 0) {
+                        console.log('ZIP-архивы не найдены через API, пробуем fallback');
+                        tryFallback();
+                        return;
+                    }
+
+                    console.log(`Найдено ${zipUrls.length} ZIP-архивов:`, zipUrls);
+                    
+                    // Загружаем каждый ZIP
+                    let loadedCount = 0;
+                    for (const url of zipUrls) {
+                        try {
+                            const resp = await fetch(url);
+                            if (resp.ok) {
+                                const blob = await resp.blob();
+                                const fileName = url.split('/').pop();
+                                const file = new File([blob], fileName, { type: 'application/zip' });
+                                processFiles([file]);
+                                loadedCount++;
+                                console.log(`Загружен архив: ${fileName}`);
+                            }
+                        } catch (e) {
+                            console.warn(`Не удалось загрузить ${url}:`, e);
+                        }
+                    }
+                    console.log(`Загружено ${loadedCount} ZIP-архивов из ${zipUrls.length}`);
+
+                } catch (error) {
+                    console.warn('Ошибка при загрузке списка файлов:', error);
+                    tryFallback();
+                }
+            }
+
+            // Fallback: пробуем стандартные имена
+            function tryFallback() {
                 const possibleNames = ['tracks.zip', 'treks.zip', 'gpx.zip', 'archive.zip'];
                 let tried = 0;
 
@@ -990,11 +1046,10 @@
                         console.log('Не найден ни один ZIP в папке tracks/');
                         return;
                     }
-                    const url = 'tracks/' + possibleNames[tried];
+                    const url = '/heatmap/tracks/' + possibleNames[tried];
                     fetch(url, { method: 'HEAD' })
                         .then(response => {
                             if (response.ok) {
-                                // Файл существует – загружаем
                                 loadZipFromUrl(url);
                             } else {
                                 tried++;
@@ -1062,8 +1117,8 @@
             setMode('tracks');
             renderFileList();
 
-            // Автоматическая загрузка первого найденного ZIP из папки tracks/
-            setTimeout(loadFirstZipFromTracks, 500);
+            // Автоматическая загрузка ВСЕХ ZIP из папки tracks/
+            setTimeout(loadAllZipsFromTracks, 600);
         })();
     </script>
 </body>
