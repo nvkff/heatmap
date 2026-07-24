@@ -19,7 +19,7 @@
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" />
 
     <style>
-        /* (стили без изменений, те же, что в последней версии) */
+        /* (стили без изменений, такие же, как в предыдущей версии) */
         * {
             margin: 0;
             padding: 0;
@@ -652,10 +652,11 @@
                 }
 
                 let weightedPoints;
-                let radius, blur;
+                // Одинаковые радиус и размытие для обоих режимов
+                const radius = 24;
+                const blur = 15;
 
                 if (state.mode === 'tracks') {
-                    // Режим "по трекам": каждый трек даёт вклад 1
                     weightedPoints = [];
                     state.tracks.forEach(track => {
                         const count = track.points.length;
@@ -665,18 +666,12 @@
                             weightedPoints.push([lat, lng, weight]);
                         });
                     });
-                    radius = 24;
-                    blur = 15;
                 } else {
-                    // Режим "по точкам": нормализованный вес, чтобы избежать пересыщения
-                    // Вес = (кол-во треков / общее кол-во точек) * коэффициент 3
+                    // Нормализованный вес для режима "по точкам"
                     const normWeight = (state.tracks.length / allPoints.length) * 3;
                     weightedPoints = allPoints.map(([lat, lng]) => [lat, lng, normWeight]);
-                    radius = 20;
-                    blur = 12;
                 }
 
-                // Прореживание при большом количестве
                 let data = weightedPoints;
                 if (data.length > 300000) {
                     data = data.filter((_, i) => i % 2 === 0);
@@ -715,16 +710,15 @@
                 renderFileList();
             }
 
-            // ----- Добавление трека с отложенным обновлением -----
+            // ----- Добавление трека -----
             function addTrack(name, points) {
                 state.tracks.push({
                     id: ++state.idCounter,
                     name: name || `Трек ${state.idCounter}`,
                     points: points,
                 });
-                // Обновляем статистику сразу
-                statTracks.textContent = state.tracks.length;
                 const totalPts = state.tracks.reduce((sum, t) => sum + t.points.length, 0);
+                statTracks.textContent = state.tracks.length;
                 statPoints.textContent = formatNum(totalPts);
                 trackCountBadge.textContent = state.tracks.length;
                 scheduleBuild();
@@ -829,7 +823,7 @@
                 return div.innerHTML;
             }
 
-            // ----- Обработка файлов -----
+            // ----- Обработка файлов (общая для загрузки из файлов и из URL) -----
             function processFiles(files) {
                 const validFiles = Array.from(files).filter(f =>
                     f.name.toLowerCase().endsWith('.gpx') ||
@@ -983,6 +977,52 @@
                 countNext();
             }
 
+            // ----- Автоматическая загрузка любого ZIP из папки tracks/ -----
+            function loadFirstZipFromTracks() {
+                // Пытаемся получить список файлов в папке tracks через index (не всегда работает)
+                // Проще: пробуем стандартные имена, а если нет — ничего не загружаем
+                // Но мы можем попробовать fetch с проверкой на 404 для нескольких вариантов
+                const possibleNames = ['tracks.zip', 'treks.zip', 'gpx.zip', 'archive.zip'];
+                let tried = 0;
+
+                function tryNext() {
+                    if (tried >= possibleNames.length) {
+                        console.log('Не найден ни один ZIP в папке tracks/');
+                        return;
+                    }
+                    const url = 'tracks/' + possibleNames[tried];
+                    fetch(url, { method: 'HEAD' })
+                        .then(response => {
+                            if (response.ok) {
+                                // Файл существует – загружаем
+                                loadZipFromUrl(url);
+                            } else {
+                                tried++;
+                                tryNext();
+                            }
+                        })
+                        .catch(() => {
+                            tried++;
+                            tryNext();
+                        });
+                }
+                tryNext();
+            }
+
+            function loadZipFromUrl(url) {
+                fetch(url)
+                    .then(response => {
+                        if (!response.ok) return null;
+                        return response.blob();
+                    })
+                    .then(blob => {
+                        if (!blob) return;
+                        const file = new File([blob], url.split('/').pop(), { type: 'application/zip' });
+                        processFiles([file]);
+                    })
+                    .catch(err => console.warn('Не удалось загрузить архив:', err));
+            }
+
             // ----- События -----
             btnLoad.addEventListener('click', () => fileInput.click());
 
@@ -1018,9 +1058,12 @@
                 }
             });
 
-            // Инициализация
+            // ----- Инициализация -----
             setMode('tracks');
             renderFileList();
+
+            // Автоматическая загрузка первого найденного ZIP из папки tracks/
+            setTimeout(loadFirstZipFromTracks, 500);
         })();
     </script>
 </body>
