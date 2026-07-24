@@ -19,7 +19,7 @@
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" />
 
     <style>
-        /* (стили без изменений) */
+        /* (стили те же) */
         * {
             margin: 0;
             padding: 0;
@@ -516,6 +516,18 @@
         (function() {
             'use strict';
 
+            // Делаем state глобальным для отладки
+            window._state = {
+                tracks: [],
+                heatLayer: null,
+                totalPoints: 0,
+                idCounter: 0,
+                mode: 'tracks',
+                buildTimeout: null,
+            };
+
+            const state = window._state;
+
             // ----- Карта -----
             const map = L.map('map', {
                 center: [55.75, 37.62],
@@ -555,17 +567,6 @@
                     this.classList.add('active');
                 });
             });
-
-            // ----- Состояние -----
-            const state = {
-                tracks: [],
-                heatLayer: null,
-                totalPoints: 0,
-                idCounter: 0,
-                mode: 'tracks',
-                buildTimeout: null,
-                loadingInProgress: false,
-            };
 
             // ----- DOM -----
             const $ = (id) => document.getElementById(id);
@@ -822,7 +823,10 @@
                 return div.innerHTML;
             }
 
-            // ----- Обработка файлов -----
+            // ----- Обработка файлов с последовательной очередью -----
+            let processingQueue = [];
+            let isProcessing = false;
+
             function processFiles(files) {
                 const validFiles = Array.from(files).filter(f =>
                     f.name.toLowerCase().endsWith('.gpx') ||
@@ -834,163 +838,109 @@
                     return;
                 }
 
-                // Если уже идёт загрузка — не прерываем, просто добавляем в очередь
-                if (state.loadingInProgress) {
-                    console.log('Загрузка уже идёт, файлы будут добавлены позже');
-                    setTimeout(() => processFiles(files), 1000);
+                processingQueue.push(...validFiles);
+                if (!isProcessing) {
+                    processNextInQueue();
+                }
+            }
+
+            function processNextInQueue() {
+                if (processingQueue.length === 0) {
+                    isProcessing = false;
+                    progressWrap.style.display = 'none';
+                    console.log('✅ Все файлы обработаны. Треков в памяти:', state.tracks.length);
                     return;
                 }
 
-                state.loadingInProgress = true;
-                progressWrap.style.display = 'block';
-                progressFill.style.width = '0%';
-                progressLabel.textContent = 'Подсчёт...';
+                isProcessing = true;
+                const file = processingQueue.shift();
+                const isZip = file.name.toLowerCase().endsWith('.zip');
 
-                let tasks = validFiles.map(f => ({
-                    file: f,
-                    isZip: f.name.toLowerCase().endsWith('.zip'),
-                    gpxCount: 0
-                }));
+                if (isZip) {
+                    progressWrap.style.display = 'block';
+                    progressFill.style.width = '0%';
+                    progressLabel.textContent = `Распаковка: ${file.name}...`;
 
-                let idx = 0;
-                let totalGpxExpected = 0;
-
-                function countGpxInZip(zipBlob, callback) {
                     const reader = new FileReader();
                     reader.onload = function(e) {
                         try {
                             const zip = new JSZip();
                             zip.loadAsync(e.target.result).then(function(zipObj) {
-                                const gpxFiles = zipObj.filter((relPath, file) =>
+                                const gpxEntries = zipObj.filter((relPath, file) =>
                                     relPath.toLowerCase().endsWith('.gpx') || relPath.toLowerCase().endsWith(
-                                    '.xml'));
-                                callback(gpxFiles.length);
-                            }).catch(() => callback(0));
-                        } catch (_) { callback(0); }
-                    };
-                    reader.readAsArrayBuffer(zipBlob);
-                }
-
-                function countNext() {
-                    if (idx >= tasks.length) {
-                        totalGpxExpected = tasks.reduce((s, t) => s + t.gpxCount, 0);
-                        if (totalGpxExpected === 0) {
-                            progressWrap.style.display = 'none';
-                            state.loadingInProgress = false;
-                            alert('GPX-треков не найдено.');
-                            return;
-                        }
-                        progressLabel.textContent = `0 / ${totalGpxExpected} GPX`;
-                        startProcessing();
-                        return;
-                    }
-                    const task = tasks[idx];
-                    if (task.isZip) {
-                        countGpxInZip(task.file, function(count) {
-                            task.gpxCount = count;
-                            idx++;
-                            countNext();
-                        });
-                    } else {
-                        task.gpxCount = 1;
-                        idx++;
-                        countNext();
-                    }
-                }
-
-                function startProcessing() {
-                    let processedGpx = 0;
-                    let currentTaskIdx = 0;
-
-                    function processNextTask() {
-                        if (currentTaskIdx >= tasks.length) {
-                            progressWrap.style.display = 'none';
-                            state.loadingInProgress = false;
-                            return;
-                        }
-                        const task = tasks[currentTaskIdx];
-                        if (task.isZip) {
-                            const reader = new FileReader();
-                            reader.onload = function(e) {
-                                try {
-                                    const zip = new JSZip();
-                                    zip.loadAsync(e.target.result).then(function(zipObj) {
-                                        const gpxEntries = zipObj.filter((relPath, file) =>
-                                            relPath.toLowerCase().endsWith('.gpx') || relPath.toLowerCase()
-                                            .endsWith('.xml'));
-                                        if (gpxEntries.length === 0) {
-                                            currentTaskIdx++;
-                                            setTimeout(processNextTask, 0);
-                                            return;
+                                        '.xml')
+                                );
+                                if (gpxEntries.length === 0) {
+                                    console.warn(`⚠️ В ZIP нет GPX-файлов: ${file.name}`);
+                                    progressWrap.style.display = 'none';
+                                    processNextInQueue();
+                                    return;
+                                }
+                                let processedInZip = 0;
+                                gpxEntries.forEach((relPath, file) => {
+                                    file.async('text').then(function(content) {
+                                        const points = parseGPX(content);
+                                        if (points.length > 0) {
+                                            const name = relPath.replace(/^.*[\\\/]/, '').replace(
+                                                /\.[^.]+$/, '');
+                                            console.log(`📄 Добавлен трек: ${name} (${points.length} точек)`);
+                                            addTrack(name, points);
                                         }
-                                        let processedInZip = 0;
-                                        gpxEntries.forEach((relPath, file) => {
-                                            file.async('text').then(function(content) {
-                                                const points = parseGPX(content);
-                                                if (points.length > 0) {
-                                                    const name = relPath.replace(/^.*[\\\/]/, '').replace(
-                                                        /\.[^.]+$/, '');
-                                                    addTrack(name, points);
-                                                }
-                                                processedInZip++;
-                                                if (processedInZip === gpxEntries.length) {
-                                                    updateProgress(gpxEntries.length);
-                                                    currentTaskIdx++;
-                                                    setTimeout(processNextTask, 0);
-                                                }
-                                            }).catch(() => {
-                                                processedInZip++;
-                                                if (processedInZip === gpxEntries.length) {
-                                                    updateProgress(gpxEntries.length);
-                                                    currentTaskIdx++;
-                                                    setTimeout(processNextTask, 0);
-                                                }
-                                            });
-                                        });
+                                        processedInZip++;
+                                        if (processedInZip === gpxEntries.length) {
+                                            progressWrap.style.display = 'none';
+                                            console.log(`✅ ZIP ${file.name} обработан (${gpxEntries.length} GPX)`);
+                                            processNextInQueue();
+                                        }
                                     }).catch(() => {
-                                        currentTaskIdx++;
-                                        setTimeout(processNextTask, 0);
+                                        processedInZip++;
+                                        if (processedInZip === gpxEntries.length) {
+                                            progressWrap.style.display = 'none';
+                                            processNextInQueue();
+                                        }
                                     });
-                                } catch (_) {
-                                    currentTaskIdx++;
-                                    setTimeout(processNextTask, 0);
-                                }
-                            };
-                            reader.readAsArrayBuffer(task.file);
-                        } else {
-                            const reader = new FileReader();
-                            reader.onload = function(e) {
-                                const points = parseGPX(e.target.result);
-                                if (points.length > 0) {
-                                    const name = task.file.name.replace(/\.[^.]+$/, '');
-                                    addTrack(name, points);
-                                }
-                                updateProgress(1);
-                                currentTaskIdx++;
-                                setTimeout(processNextTask, 0);
-                            };
-                            reader.readAsText(task.file);
+                                });
+                            }).catch(() => {
+                                progressWrap.style.display = 'none';
+                                console.warn(`⚠️ Не удалось распаковать ZIP: ${file.name}`);
+                                processNextInQueue();
+                            });
+                        } catch (_) {
+                            progressWrap.style.display = 'none';
+                            console.warn(`⚠️ Ошибка при обработке ZIP: ${file.name}`);
+                            processNextInQueue();
                         }
-                    }
+                    };
+                    reader.readAsArrayBuffer(file);
+                } else {
+                    // Обычный GPX
+                    progressWrap.style.display = 'block';
+                    progressFill.style.width = '50%';
+                    progressLabel.textContent = `Обработка: ${file.name}...`;
 
-                    function updateProgress(n) {
-                        processedGpx += n;
-                        const pct = Math.min(100, Math.round((processedGpx / totalGpxExpected) * 100));
-                        progressFill.style.width = pct + '%';
-                        progressLabel.textContent = `${processedGpx} / ${totalGpxExpected} GPX`;
-                    }
-
-                    processNextTask();
+                    const reader = new FileReader();
+                    reader.onload = function(e) {
+                        const points = parseGPX(e.target.result);
+                        if (points.length > 0) {
+                            const name = file.name.replace(/\.[^.]+$/, '');
+                            console.log(`📄 Добавлен трек: ${name} (${points.length} точек)`);
+                            addTrack(name, points);
+                        }
+                        progressWrap.style.display = 'none';
+                        processNextInQueue();
+                    };
+                    reader.onerror = function() {
+                        progressWrap.style.display = 'none';
+                        processNextInQueue();
+                    };
+                    reader.readAsText(file);
                 }
-
-                countNext();
             }
 
-            // ----- Автоматическая загрузка ВСЕХ ZIP из папки tracks/ -----
-            async function loadAllZipsFromTracks() {
+            // ----- Автоматическая загрузка ZIP из папки tracks/ -----
+            async function loadAllZips() {
                 const baseUrl = window.location.origin + '/heatmap/tracks/';
                 const possibleNames = [
-                    'tracks.zip',
                     'tracks_part_1.zip',
                     'tracks_part_2.zip',
                     'tracks_part_3.zip',
@@ -1001,15 +951,14 @@
                     'tracks_part_8.zip',
                     'tracks_part_9.zip',
                     'tracks_part_10.zip',
+                    'tracks.zip',
                     'treks.zip',
                     'gpx.zip',
                     'archive.zip',
                 ];
 
-                let loaded = 0;
-                const total = possibleNames.length;
-
                 console.log('🔍 Поиск ZIP-архивов в папке tracks/...');
+                let found = 0;
 
                 for (const name of possibleNames) {
                     const url = baseUrl + name;
@@ -1017,76 +966,34 @@
                         const response = await fetch(url, { method: 'HEAD' });
                         if (response.ok) {
                             console.log(`📦 Найден архив: ${name}`);
-                            await loadZipFromUrl(url);
-                            loaded++;
+                            // Загружаем архив
+                            const blobResp = await fetch(url);
+                            if (blobResp.ok) {
+                                const blob = await blobResp.blob();
+                                const file = new File([blob], name, { type: 'application/zip' });
+                                processFiles([file]);
+                                found++;
+                                // Ждём обработки перед следующим файлом
+                                await new Promise(resolve => {
+                                    const checkDone = setInterval(() => {
+                                        if (!isProcessing && processingQueue.length === 0) {
+                                            clearInterval(checkDone);
+                                            resolve();
+                                        }
+                                    }, 200);
+                                });
+                            }
                         }
                     } catch (e) {
-                        // просто пропускаем
+                        // Пропускаем
                     }
                 }
 
-                if (loaded === 0) {
-                    console.warn('❌ Не найдено ни одного ZIP-архива в папке tracks/');
-                    // Пробуем fallback с парсингом HTML
-                    tryFallbackParse();
+                if (found === 0) {
+                    console.warn('❌ Не найдено ZIP-архивов в папке tracks/');
                 } else {
-                    console.log(`✅ Загружено ${loaded} ZIP-архивов`);
+                    console.log(`✅ Загружено ${found} ZIP-архивов`);
                 }
-            }
-
-            // Fallback: парсинг HTML-страницы списка файлов
-            async function tryFallbackParse() {
-                try {
-                    const response = await fetch('/heatmap/tracks/');
-                    if (!response.ok) return;
-                    const html = await response.text();
-                    const parser = new DOMParser();
-                    const doc = parser.parseFromString(html, 'text/html');
-                    const links = doc.querySelectorAll('a[href$=".zip"], a[href$=".ZIP"]');
-                    let found = 0;
-                    for (const link of links) {
-                        const href = link.getAttribute('href');
-                        if (href && !href.includes('/..') && !href.includes('?') && !href.includes('#')) {
-                            const url = '/heatmap/tracks/' + href;
-                            console.log(`📦 Найден архив (HTML): ${href}`);
-                            await loadZipFromUrl(url);
-                            found++;
-                        }
-                    }
-                    if (found > 0) {
-                        console.log(`✅ Загружено ${found} ZIP-архивов (через парсинг HTML)`);
-                    }
-                } catch (e) {
-                    console.warn('❌ Не удалось получить список файлов через HTML');
-                }
-            }
-
-            function loadZipFromUrl(url) {
-                return new Promise((resolve, reject) => {
-                    fetch(url)
-                        .then(response => {
-                            if (!response.ok) {
-                                reject(new Error('HTTP ' + response.status));
-                                return;
-                            }
-                            return response.blob();
-                        })
-                        .then(blob => {
-                            if (!blob) {
-                                reject(new Error('Нет данных'));
-                                return;
-                            }
-                            const fileName = url.split('/').pop();
-                            const file = new File([blob], fileName, { type: 'application/zip' });
-                            console.log(`📥 Загрузка: ${fileName} (${(blob.size / 1024 / 1024).toFixed(1)} МБ)`);
-                            processFiles([file]);
-                            resolve();
-                        })
-                        .catch(err => {
-                            console.warn(`⚠️ Не удалось загрузить ${url}:`, err);
-                            reject(err);
-                        });
-                });
             }
 
             // ----- События -----
@@ -1128,8 +1035,7 @@
             setMode('tracks');
             renderFileList();
 
-            // Автоматическая загрузка ВСЕХ ZIP из папки tracks/
-            setTimeout(loadAllZipsFromTracks, 800);
+            setTimeout(loadAllZips, 800);
         })();
     </script>
 </body>
