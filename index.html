@@ -19,7 +19,7 @@
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" />
 
     <style>
-        /* (стили те же) */
+        /* (стили такие же, как в последней версии) */
         * {
             margin: 0;
             padding: 0;
@@ -516,7 +516,7 @@
         (function() {
             'use strict';
 
-            // Делаем state глобальным для отладки
+            // Глобальное состояние для отладки
             window._state = {
                 tracks: [],
                 heatLayer: null,
@@ -937,62 +937,94 @@
                 }
             }
 
-            // ----- Автоматическая загрузка ZIP из папки tracks/ -----
-            async function loadAllZips() {
+            // ----- Автоматическая загрузка всех файлов из папки tracks/ -----
+            async function loadAllFilesFromTracks() {
                 const baseUrl = window.location.origin + '/heatmap/tracks/';
-                const possibleNames = [
-                    'tracks_part_1.zip',
-                    'tracks_part_2.zip',
-                    'tracks_part_3.zip',
-                    'tracks_part_4.zip',
-                    'tracks_part_5.zip',
-                    'tracks_part_6.zip',
-                    'tracks_part_7.zip',
-                    'tracks_part_8.zip',
-                    'tracks_part_9.zip',
-                    'tracks_part_10.zip',
-                    'tracks.zip',
-                    'treks.zip',
-                    'gpx.zip',
-                    'archive.zip',
+
+                // Сначала пробуем загрузить список файлов через HTML-парсинг
+                try {
+                    const response = await fetch('/heatmap/tracks/');
+                    if (response.ok) {
+                        const html = await response.text();
+                        const parser = new DOMParser();
+                        const doc = parser.parseFromString(html, 'text/html');
+                        const links = doc.querySelectorAll('a');
+
+                        const filesToLoad = [];
+                        for (const link of links) {
+                            const href = link.getAttribute('href');
+                            if (!href || href.includes('/..') || href.includes('?')) continue;
+                            const fileName = decodeURIComponent(href);
+                            if (fileName.endsWith('.zip') || fileName.endsWith('.gpx') || fileName.endsWith('.xml')) {
+                                filesToLoad.push(fileName);
+                            }
+                        }
+
+                        if (filesToLoad.length > 0) {
+                            console.log(`🔍 Найдено файлов в tracks/: ${filesToLoad.length}`);
+                            for (const fileName of filesToLoad) {
+                                const url = baseUrl + fileName;
+                                console.log(`📥 Загрузка: ${fileName}`);
+                                try {
+                                    const resp = await fetch(url);
+                                    if (resp.ok) {
+                                        const blob = await resp.blob();
+                                        const file = new File([blob], fileName);
+                                        processFiles([file]);
+                                        // Ждём обработки
+                                        await new Promise(resolve => {
+                                            const check = setInterval(() => {
+                                                if (!isProcessing && processingQueue.length === 0) {
+                                                    clearInterval(check);
+                                                    resolve();
+                                                }
+                                            }, 200);
+                                        });
+                                    }
+                                } catch (e) {
+                                    console.warn(`⚠️ Не удалось загрузить ${fileName}`);
+                                }
+                            }
+                            console.log(`✅ Загружено ${filesToLoad.length} файлов`);
+                            return;
+                        }
+                    }
+                } catch (e) {
+                    console.warn('Не удалось получить список файлов через HTML');
+                }
+
+                // Fallback: пробуем стандартные имена
+                console.log('🔍 Пробуем стандартные имена...');
+                const fallbackNames = [
+                    'tracks_part_1.zip', 'tracks_part_2.zip', 'tracks_part_3.zip', 'tracks_part_4.zip',
+                    'tracks_part_5.zip', 'tracks_part_6.zip', 'tracks_part_7.zip', 'tracks_part_8.zip',
+                    'tracks_part_9.zip', 'tracks_part_10.zip',
+                    'tracks.zip', 'treks.zip', 'gpx.zip', 'archive.zip',
+                    'tracks.gpx', 'track.gpx', 'activities.gpx'
                 ];
 
-                console.log('🔍 Поиск ZIP-архивов в папке tracks/...');
-                let found = 0;
-
-                for (const name of possibleNames) {
+                for (const name of fallbackNames) {
                     const url = baseUrl + name;
                     try {
-                        const response = await fetch(url, { method: 'HEAD' });
-                        if (response.ok) {
-                            console.log(`📦 Найден архив: ${name}`);
-                            // Загружаем архив
+                        const resp = await fetch(url, { method: 'HEAD' });
+                        if (resp.ok) {
+                            console.log(`📦 Найден файл: ${name}`);
                             const blobResp = await fetch(url);
                             if (blobResp.ok) {
                                 const blob = await blobResp.blob();
-                                const file = new File([blob], name, { type: 'application/zip' });
+                                const file = new File([blob], name);
                                 processFiles([file]);
-                                found++;
-                                // Ждём обработки перед следующим файлом
                                 await new Promise(resolve => {
-                                    const checkDone = setInterval(() => {
+                                    const check = setInterval(() => {
                                         if (!isProcessing && processingQueue.length === 0) {
-                                            clearInterval(checkDone);
+                                            clearInterval(check);
                                             resolve();
                                         }
                                     }, 200);
                                 });
                             }
                         }
-                    } catch (e) {
-                        // Пропускаем
-                    }
-                }
-
-                if (found === 0) {
-                    console.warn('❌ Не найдено ZIP-архивов в папке tracks/');
-                } else {
-                    console.log(`✅ Загружено ${found} ZIP-архивов`);
+                    } catch (e) { /* пропускаем */ }
                 }
             }
 
@@ -1035,7 +1067,7 @@
             setMode('tracks');
             renderFileList();
 
-            setTimeout(loadAllZips, 800);
+            setTimeout(loadAllFilesFromTracks, 800);
         })();
     </script>
 </body>
