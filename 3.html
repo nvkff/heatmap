@@ -1,0 +1,1055 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Тепловая карта треков</title>
+
+    <!-- Leaflet -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js">
+    </script>
+    <!-- Leaflet.heat -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet.heat/0.2.0/leaflet-heat.js">
+    </script>
+    <!-- JSZip -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js">
+    </script>
+    <!-- Font Awesome -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" />
+
+    <style>
+        /* (стили те же) */
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: 'Segoe UI', system-ui, sans-serif;
+            background: #0b0e14;
+            color: #e8edf5;
+            height: 100vh;
+            overflow: hidden;
+        }
+        #map {
+            width: 100vw;
+            height: 100vh;
+            background: #131a26;
+        }
+        #panel {
+            position: absolute;
+            top: 16px;
+            left: 16px;
+            z-index: 1000;
+            width: 360px;
+            max-width: calc(100vw - 32px);
+            max-height: calc(100vh - 32px);
+            background: rgba(18, 25, 38, 0.92);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            border: 1px solid rgba(255, 255, 255, 0.06);
+            border-radius: 20px;
+            padding: 18px 20px 20px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.8);
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            transition: transform 0.3s ease, opacity 0.3s ease;
+            overflow: hidden;
+        }
+        #panel.collapsed .panel-body {
+            display: none;
+        }
+        #panel.collapsed {
+            width: auto;
+            padding: 12px 16px;
+            gap: 0;
+        }
+        #panel.collapsed .panel-header h1 {
+            font-size: 16px;
+        }
+        #panel.collapsed .panel-header .badge {
+            display: none;
+        }
+        .panel-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .panel-header h1 {
+            font-size: 18px;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin: 0;
+        }
+        .panel-header h1 i {
+            color: #60a5fa;
+        }
+        .panel-header .badge {
+            background: rgba(96, 165, 250, 0.15);
+            color: #60a5fa;
+            font-size: 11px;
+            padding: 2px 10px;
+            border-radius: 30px;
+            font-weight: 500;
+        }
+        .panel-header .toggle-btn {
+            background: none;
+            border: none;
+            color: rgba(255,255,255,0.4);
+            cursor: pointer;
+            font-size: 18px;
+            padding: 0 4px;
+            transition: transform 0.3s;
+        }
+        .panel-header .toggle-btn:hover {
+            color: #fff;
+        }
+        #panel.collapsed .toggle-btn {
+            transform: rotate(180deg);
+        }
+        .panel-body {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+        .panel-sub {
+            font-size: 12px;
+            opacity: 0.5;
+            margin-top: -6px;
+            margin-bottom: 2px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+            padding-bottom: 10px;
+        }
+        .upload-zone {
+            border: 2px dashed rgba(255, 255, 255, 0.08);
+            border-radius: 14px;
+            padding: 16px 12px;
+            text-align: center;
+            cursor: pointer;
+            transition: background 0.2s, border-color 0.2s;
+            background: rgba(255, 255, 255, 0.02);
+        }
+        .upload-zone:hover {
+            background: rgba(255, 255, 255, 0.04);
+            border-color: rgba(255, 255, 255, 0.15);
+        }
+        .upload-zone.dragover {
+            background: rgba(96, 165, 250, 0.08);
+            border-color: #60a5fa;
+        }
+        .upload-zone .icon {
+            font-size: 28px;
+            display: block;
+            margin-bottom: 2px;
+            opacity: 0.6;
+        }
+        .upload-zone .label {
+            font-size: 13px;
+            font-weight: 500;
+        }
+        .upload-zone .hint {
+            font-size: 11px;
+            opacity: 0.3;
+            margin-top: 2px;
+        }
+        #fileInput {
+            display: none;
+        }
+        #progressWrap {
+            display: none;
+            margin: 2px 0 4px;
+        }
+        #progressWrap .bar {
+            width: 100%;
+            height: 4px;
+            background: rgba(255, 255, 255, 0.06);
+            border-radius: 4px;
+            overflow: hidden;
+        }
+        #progressWrap .bar .fill {
+            height: 100%;
+            width: 0%;
+            background: linear-gradient(90deg, #3b82f6, #8b5cf6);
+            border-radius: 4px;
+            transition: width 0.2s ease;
+        }
+        #progressWrap .label {
+            font-size: 11px;
+            opacity: 0.5;
+            margin-top: 4px;
+            text-align: center;
+        }
+        #stats {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 6px;
+            margin: 2px 0 4px;
+        }
+        #stats .stat {
+            background: rgba(255, 255, 255, 0.03);
+            border-radius: 12px;
+            padding: 6px 4px;
+            text-align: center;
+        }
+        #stats .stat .num {
+            font-size: 18px;
+            font-weight: 600;
+            color: #a5b4fc;
+            line-height: 1.2;
+        }
+        #stats .stat .lbl {
+            font-size: 9px;
+            text-transform: uppercase;
+            letter-spacing: 0.4px;
+            opacity: 0.4;
+            margin-top: 1px;
+        }
+        #stats .stat .num.green {
+            color: #6ee7b7;
+        }
+        .mode-toggle {
+            display: flex;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 30px;
+            padding: 3px;
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            margin: 2px 0 4px;
+            position: relative;
+            width: 100%;
+        }
+        .mode-toggle .option {
+            flex: 1;
+            text-align: center;
+            padding: 6px 4px;
+            border-radius: 30px;
+            font-size: 11px;
+            font-weight: 500;
+            color: rgba(255,255,255,0.4);
+            cursor: pointer;
+            transition: background 0.25s, color 0.25s, box-shadow 0.25s;
+            user-select: none;
+            background: transparent;
+            border: none;
+        }
+        .mode-toggle .option.active {
+            background: rgba(59, 130, 246, 0.25);
+            color: #fff;
+            box-shadow: 0 0 8px rgba(59, 130, 246, 0.2);
+        }
+        .mode-toggle .option:hover:not(.active) {
+            color: rgba(255,255,255,0.7);
+        }
+        .search-box {
+            display: flex;
+            align-items: center;
+            background: rgba(255, 255, 255, 0.04);
+            border-radius: 10px;
+            padding: 0 12px;
+            border: 1px solid rgba(255, 255, 255, 0.04);
+            transition: border-color 0.2s;
+        }
+        .search-box:focus-within {
+            border-color: rgba(96, 165, 250, 0.3);
+        }
+        .search-box i {
+            color: rgba(255, 255, 255, 0.2);
+            font-size: 12px;
+        }
+        .search-box input {
+            background: transparent;
+            border: none;
+            padding: 8px 10px;
+            color: #e8edf5;
+            font-size: 13px;
+            width: 100%;
+            outline: none;
+        }
+        .search-box input::placeholder {
+            color: rgba(255, 255, 255, 0.2);
+        }
+        #fileList {
+            font-size: 12px;
+            max-height: 120px;
+            overflow-y: auto;
+            border-top: 1px solid rgba(255, 255, 255, 0.04);
+            padding-top: 8px;
+            margin-top: 4px;
+        }
+        #fileList .item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 4px 6px;
+            border-radius: 6px;
+            transition: background 0.15s;
+            opacity: 0.8;
+        }
+        #fileList .item:hover {
+            background: rgba(255, 255, 255, 0.04);
+        }
+        #fileList .item .name {
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            max-width: 160px;
+            font-weight: 400;
+        }
+        #fileList .item .pts {
+            opacity: 0.4;
+            font-variant-numeric: tabular-nums;
+            margin-right: 8px;
+        }
+        #fileList .item .del {
+            color: rgba(255, 255, 255, 0.2);
+            cursor: pointer;
+            transition: color 0.2s;
+            background: none;
+            border: none;
+            font-size: 12px;
+            padding: 2px 4px;
+        }
+        #fileList .item .del:hover {
+            color: #f87171;
+        }
+        #fileList .empty {
+            opacity: 0.3;
+            text-align: center;
+            padding: 8px 0;
+            font-style: italic;
+            font-size: 12px;
+        }
+        .actions {
+            display: flex;
+            gap: 6px;
+            flex-wrap: wrap;
+            margin-top: 2px;
+        }
+        .actions button {
+            flex: 1;
+            min-width: 40px;
+            background: rgba(255, 255, 255, 0.04);
+            border: none;
+            border-radius: 10px;
+            padding: 8px 10px;
+            font-size: 12px;
+            font-weight: 500;
+            color: #e8edf5;
+            cursor: pointer;
+            transition: background 0.2s, transform 0.1s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+        }
+        .actions button:hover {
+            background: rgba(255, 255, 255, 0.08);
+        }
+        .actions button:active {
+            transform: scale(0.96);
+        }
+        .actions button.primary {
+            background: #3b82f6;
+            color: #fff;
+        }
+        .actions button.primary:hover {
+            background: #2563eb;
+        }
+        .actions button.danger {
+            color: #f87171;
+        }
+        .actions button.danger:hover {
+            background: rgba(248, 113, 113, 0.1);
+        }
+        .actions button.success {
+            color: #6ee7b7;
+        }
+        .actions button.success:hover {
+            background: rgba(110, 231, 183, 0.08);
+        }
+        .layer-toggle {
+            position: absolute;
+            bottom: 24px;
+            right: 24px;
+            z-index: 1000;
+            background: rgba(18, 25, 38, 0.8);
+            backdrop-filter: blur(8px);
+            border: 1px solid rgba(255, 255, 255, 0.06);
+            border-radius: 14px;
+            padding: 4px 6px;
+            display: flex;
+            gap: 2px;
+            box-shadow: 0 8px 30px rgba(0, 0, 0, 0.5);
+        }
+        .layer-toggle button {
+            background: transparent;
+            border: none;
+            color: #888;
+            padding: 6px 10px;
+            border-radius: 10px;
+            font-size: 11px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: background 0.2s, color 0.2s;
+        }
+        .layer-toggle button:hover {
+            color: #eee;
+            background: rgba(255, 255, 255, 0.05);
+        }
+        .layer-toggle button.active {
+            color: #fff;
+            background: rgba(59, 130, 246, 0.3);
+        }
+        @media (max-width: 640px) {
+            #panel {
+                top: 10px;
+                left: 10px;
+                right: 10px;
+                width: auto;
+                max-height: calc(100vh - 20px);
+                padding: 14px 16px 16px;
+                border-radius: 16px;
+            }
+            #panel.collapsed {
+                width: auto;
+                padding: 10px 14px;
+            }
+            #stats {
+                grid-template-columns: 1fr 1fr;
+                gap: 4px;
+            }
+            #stats .stat .num {
+                font-size: 16px;
+            }
+            .upload-zone {
+                padding: 12px 8px;
+            }
+            .layer-toggle {
+                bottom: 16px;
+                right: 16px;
+                padding: 3px 4px;
+            }
+            .layer-toggle button {
+                font-size: 10px;
+                padding: 4px 8px;
+            }
+        }
+        ::-webkit-scrollbar {
+            width: 4px;
+            height: 4px;
+        }
+        ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, 0.15);
+            border-radius: 4px;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="map"></div>
+
+    <!-- Панель -->
+    <div id="panel">
+        <div class="panel-header">
+            <h1><i class="fas fa-fire"></i> <span>Тепловая карта</span></h1>
+            <span class="badge" id="trackCountBadge">0</span>
+            <button class="toggle-btn" id="panelToggle"><i class="fas fa-chevron-left"></i></button>
+        </div>
+
+        <div class="panel-body">
+            <div class="panel-sub">Режим: <span id="modeLabel">по трекам</span></div>
+
+            <div class="mode-toggle" id="modeToggle">
+                <button class="option active" data-mode="tracks" id="modeTracks">По трекам</button>
+                <button class="option" data-mode="points" id="modePoints">По точкам</button>
+            </div>
+
+            <div class="upload-zone" id="dropZone">
+                <span class="icon"><i class="fas fa-cloud-upload-alt"></i></span>
+                <div class="label">Выберите ZIP или GPX</div>
+                <div class="hint">или перетащите сюда</div>
+                <input type="file" id="fileInput" multiple accept=".zip,.gpx,.xml" />
+            </div>
+
+            <div id="progressWrap">
+                <div class="bar"><div class="fill" id="progressFill"></div></div>
+                <div class="label" id="progressLabel">Обработка…</div>
+            </div>
+
+            <div id="stats">
+                <div class="stat"><div class="num" id="statTracks">0</div><div class="lbl">Треков</div></div>
+                <div class="stat"><div class="num green" id="statPoints">0</div><div class="lbl">Точек</div></div>
+            </div>
+
+            <div class="search-box">
+                <i class="fas fa-search"></i>
+                <input type="text" id="searchInput" placeholder="Поиск треков..." />
+            </div>
+
+            <div id="fileList">
+                <div class="empty">Нет треков</div>
+            </div>
+
+            <div class="actions">
+                <button class="primary" id="btnLoad"><i class="fas fa-folder-open"></i> Загрузить</button>
+                <button class="success" id="btnExport"><i class="fas fa-file-archive"></i> Экспорт ZIP</button>
+                <button class="danger" id="btnClear"><i class="fas fa-trash-alt"></i> Очистить</button>
+                <button id="btnFit"><i class="fas fa-expand"></i> Всё</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Переключатель слоёв -->
+    <div class="layer-toggle" id="layerToggle">
+        <button data-layer="streets" class="active"><i class="fas fa-road"></i></button>
+        <button data-layer="satellite"><i class="fas fa-satellite"></i></button>
+        <button data-layer="dark"><i class="fas fa-moon"></i></button>
+    </div>
+
+    <script>
+        (function() {
+            'use strict';
+
+            // ----- СОСТОЯНИЕ -----
+            window._state = {
+                tracks: [],
+                heatLayer: null,
+                totalPoints: 0,
+                idCounter: 0,
+                mode: 'tracks',
+            };
+
+            const state = window._state;
+
+            // ----- НАСТРОЙКИ ОПТИМИЗАЦИИ -----
+            const REBUILD_INTERVAL = 20;
+            const HEAT_RADIUS = 20;
+            const HEAT_BLUR = 12;
+
+            // ----- КАРТА -----
+            const map = L.map('map', {
+                center: [55.75, 37.62],
+                zoom: 11,
+                zoomControl: true,
+                fadeAnimation: true,
+                attributionControl: true,
+            });
+
+            const tileLayers = {
+                streets: L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                    maxZoom: 19,
+                    attribution: '© OpenStreetMap',
+                }),
+                satellite: L.tileLayer(
+                    'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+                        maxZoom: 19,
+                        attribution: '© Esri',
+                    }),
+                dark: L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+                    maxZoom: 19,
+                    attribution: '© CARTO',
+                }),
+            };
+
+            let activeLayer = 'streets';
+            tileLayers.streets.addTo(map);
+
+            document.querySelectorAll('#layerToggle button').forEach((btn) => {
+                btn.addEventListener('click', function() {
+                    const key = this.dataset.layer;
+                    if (key === activeLayer) return;
+                    tileLayers[activeLayer].removeFrom(map);
+                    tileLayers[key].addTo(map);
+                    activeLayer = key;
+                    document.querySelectorAll('#layerToggle button').forEach((b) => b.classList.remove('active'));
+                    this.classList.add('active');
+                });
+            });
+
+            // ----- DOM -----
+            const $ = (id) => document.getElementById(id);
+            const fileInput = $('fileInput');
+            const dropZone = $('dropZone');
+            const fileList = $('fileList');
+            const statTracks = $('statTracks');
+            const statPoints = $('statPoints');
+            const progressWrap = $('progressWrap');
+            const progressFill = $('progressFill');
+            const progressLabel = $('progressLabel');
+            const searchInput = $('searchInput');
+            const trackCountBadge = $('trackCountBadge');
+            const btnLoad = $('btnLoad');
+            const btnClear = $('btnClear');
+            const btnFit = $('btnFit');
+            const btnExport = $('btnExport');
+            const panel = $('panel');
+            const panelToggle = $('panelToggle');
+            const modeTracksBtn = $('modeTracks');
+            const modePointsBtn = $('modePoints');
+            const modeLabel = $('modeLabel');
+
+            // ----- Сворачивание -----
+            panelToggle.addEventListener('click', function() {
+                panel.classList.toggle('collapsed');
+                const icon = this.querySelector('i');
+                icon.className = panel.classList.contains('collapsed') ? 'fas fa-chevron-right' : 'fas fa-chevron-left';
+            });
+
+            // ----- Режим -----
+            function setMode(mode) {
+                state.mode = mode;
+                modeTracksBtn.classList.toggle('active', mode === 'tracks');
+                modePointsBtn.classList.toggle('active', mode === 'points');
+                modeLabel.textContent = mode === 'tracks' ? 'по трекам' : 'по точкам';
+                buildHeatmap();
+            }
+
+            modeTracksBtn.addEventListener('click', () => { if (state.mode !== 'tracks') setMode('tracks'); });
+            modePointsBtn.addEventListener('click', () => { if (state.mode !== 'points') setMode('points'); });
+
+            // ----- Утилиты -----
+            function formatNum(n) {
+                return new Intl.NumberFormat('ru-RU').format(n);
+            }
+
+            function parseGPX(xmlText) {
+                const parser = new DOMParser();
+                const doc = parser.parseFromString(xmlText, 'text/xml');
+                const points = [];
+                doc.querySelectorAll('trkpt').forEach(pt => {
+                    const lat = parseFloat(pt.getAttribute('lat'));
+                    const lon = parseFloat(pt.getAttribute('lon'));
+                    if (!isNaN(lat) && !isNaN(lon)) points.push([lat, lon]);
+                });
+                return points;
+            }
+
+            // ----- Построение тепловой карты -----
+            let rebuildCounter = 0;
+
+            function buildHeatmap() {
+                const allPoints = [];
+                state.tracks.forEach(t => allPoints.push(...t.points));
+                state.totalPoints = allPoints.length;
+
+                statTracks.textContent = state.tracks.length;
+                statPoints.textContent = formatNum(state.totalPoints);
+                trackCountBadge.textContent = state.tracks.length;
+
+                if (state.totalPoints === 0) {
+                    if (state.heatLayer) {
+                        map.removeLayer(state.heatLayer);
+                        state.heatLayer = null;
+                    }
+                    renderFileList();
+                    return;
+                }
+
+                let weightedPoints;
+                if (state.mode === 'tracks') {
+                    weightedPoints = [];
+                    state.tracks.forEach(track => {
+                        const count = track.points.length;
+                        if (count === 0) return;
+                        const weight = 1.0 / count;
+                        track.points.forEach(([lat, lng]) => {
+                            weightedPoints.push([lat, lng, weight]);
+                        });
+                    });
+                } else {
+                    const normWeight = (state.tracks.length / allPoints.length) * 3;
+                    weightedPoints = allPoints.map(([lat, lng]) => [lat, lng, normWeight]);
+                }
+
+                let data = weightedPoints;
+                if (data.length > 300000) {
+                    data = data.filter((_, i) => i % 2 === 0);
+                }
+
+                if (state.heatLayer) {
+                    map.removeLayer(state.heatLayer);
+                    state.heatLayer = null;
+                }
+
+                state.heatLayer = L.heatLayer(data, {
+                    radius: HEAT_RADIUS,
+                    blur: HEAT_BLUR,
+                    maxZoom: 18,
+                    minOpacity: 0.25,
+                    gradient: {
+                        0.0: 'rgba(0, 0, 255, 0.1)',
+                        0.15: 'rgba(0, 40, 255, 0.5)',
+                        0.35: 'rgba(0, 150, 255, 0.8)',
+                        0.50: 'rgba(0, 255, 200, 0.9)',
+                        0.65: 'rgba(100, 255, 0, 1.0)',
+                        0.80: 'rgba(255, 220, 0, 1.0)',
+                        0.92: 'rgba(255, 100, 0, 1.0)',
+                        1.0: 'rgba(255, 0, 0, 1.0)',
+                    },
+                }).addTo(map);
+
+                if (state.tracks.length === 1) {
+                    const coords = state.tracks[0].points;
+                    if (coords.length > 0) {
+                        const bounds = L.latLngBounds(coords);
+                        map.fitBounds(bounds, { padding: [40, 40], maxZoom: 14 });
+                    }
+                }
+
+                renderFileList();
+            }
+
+            // ----- Добавление трека -----
+            function addTrack(name, points) {
+                state.tracks.push({
+                    id: ++state.idCounter,
+                    name: name || `Трек ${state.idCounter}`,
+                    points: points,
+                });
+
+                const totalPts = state.tracks.reduce((sum, t) => sum + t.points.length, 0);
+                statTracks.textContent = state.tracks.length;
+                statPoints.textContent = formatNum(totalPts);
+                trackCountBadge.textContent = state.tracks.length;
+
+                rebuildCounter++;
+                if (rebuildCounter >= REBUILD_INTERVAL) {
+                    rebuildCounter = 0;
+                    buildHeatmap();
+                }
+            }
+
+            function removeTrack(id) {
+                state.tracks = state.tracks.filter(t => t.id !== id);
+                buildHeatmap();
+            }
+
+            function clearAll() {
+                if (state.heatLayer) {
+                    map.removeLayer(state.heatLayer);
+                    state.heatLayer = null;
+                }
+                state.tracks = [];
+                state.totalPoints = 0;
+                state.idCounter = 0;
+                rebuildCounter = 0;
+                statTracks.textContent = '0';
+                statPoints.textContent = '0';
+                trackCountBadge.textContent = '0';
+                renderFileList();
+                progressWrap.style.display = 'none';
+                fileInput.value = '';
+                map.setView([55.75, 37.62], 11);
+            }
+
+            function fitAll() {
+                if (state.tracks.length === 0) return;
+                const allPoints = [];
+                state.tracks.forEach(t => allPoints.push(...t.points));
+                if (allPoints.length === 0) return;
+                const bounds = L.latLngBounds(allPoints);
+                map.fitBounds(bounds, { padding: [50, 50], maxZoom: 14 });
+            }
+
+            // ----- Экспорт ZIP -----
+            function exportZip() {
+                if (state.tracks.length === 0) {
+                    alert('Нет треков для экспорта.');
+                    return;
+                }
+                const zip = new JSZip();
+                state.tracks.forEach(t => {
+                    let gpx = '<?xml version="1.0" encoding="UTF-8"?>\n';
+                    gpx += '<gpx version="1.1" xmlns="http://www.topografix.com/GPX/1/1">\n';
+                    gpx += '  <trk>\n    <name>' + escapeHtml(t.name) + '</name>\n    <trkseg>\n';
+                    t.points.forEach(([lat, lon]) => {
+                        gpx += `      <trkpt lat="${lat}" lon="${lon}"></trkpt>\n`;
+                    });
+                    gpx += '    </trkseg>\n  </trk>\n</gpx>';
+                    zip.file((t.name || 'track') + '.gpx', gpx);
+                });
+                zip.generateAsync({ type: 'blob' }).then(function(blob) {
+                    const link = document.createElement('a');
+                    link.href = URL.createObjectURL(blob);
+                    link.download = 'tracks_export.zip';
+                    document.body.appendChild(link);
+                    link.click();
+                    document.body.removeChild(link);
+                    URL.revokeObjectURL(link.href);
+                });
+            }
+
+            function renderFileList() {
+                const query = searchInput.value.toLowerCase().trim();
+                let filtered = state.tracks;
+                if (query) filtered = state.tracks.filter(t => t.name.toLowerCase().includes(query));
+
+                if (filtered.length === 0) {
+                    fileList.innerHTML = '<div class="empty">' + (state.tracks.length ? 'Нет совпадений' : 'Нет треков') +
+                        '</div>';
+                    return;
+                }
+                let html = '';
+                filtered.forEach(t => {
+                    const name = t.name || `Трек ${t.id}`;
+                    const pts = t.points.length;
+                    html += `<div class="item" data-id="${t.id}">
+                                <span class="name">${escapeHtml(name)}</span>
+                                <span class="pts">${formatNum(pts)}</span>
+                                <button class="del" data-id="${t.id}" title="Удалить"><i class="fas fa-times"></i></button>
+                            </div>`;
+                });
+                fileList.innerHTML = html;
+                document.querySelectorAll('#fileList .del').forEach(btn => {
+                    btn.addEventListener('click', function(e) {
+                        e.stopPropagation();
+                        const id = parseInt(this.dataset.id);
+                        removeTrack(id);
+                    });
+                });
+            }
+
+            function escapeHtml(str) {
+                const div = document.createElement('div');
+                div.textContent = str;
+                return div.innerHTML;
+            }
+
+            // ----- ОЧЕРЕДЬ ЗАГРУЗКИ (ПОСЛЕДОВАТЕЛЬНАЯ, НО БЫСТРАЯ) -----
+            let processingQueue = [];
+            let isProcessing = false;
+            let totalFilesCount = 0;
+            let processedCount = 0;
+
+            function processFiles(files) {
+                const validFiles = Array.from(files).filter(f =>
+                    f.name.toLowerCase().endsWith('.gpx') ||
+                    f.name.toLowerCase().endsWith('.xml') ||
+                    f.name.toLowerCase().endsWith('.zip')
+                );
+                if (validFiles.length === 0) {
+                    alert('Выберите GPX или ZIP');
+                    return;
+                }
+
+                processingQueue.push(...validFiles);
+                totalFilesCount = processingQueue.length;
+                processedCount = 0;
+
+                progressWrap.style.display = 'block';
+                progressFill.style.width = '0%';
+                progressLabel.textContent = `0 / ${totalFilesCount} файлов`;
+
+                if (!isProcessing) {
+                    processNextInQueue();
+                }
+            }
+
+            function processNextInQueue() {
+                if (processingQueue.length === 0) {
+                    isProcessing = false;
+                    progressWrap.style.display = 'none';
+                    if (rebuildCounter > 0) {
+                        rebuildCounter = 0;
+                        buildHeatmap();
+                    }
+                    console.log('✅ Все файлы обработаны. Треков в памяти:', state.tracks.length);
+                    return;
+                }
+
+                isProcessing = true;
+                const file = processingQueue.shift();
+                const isZip = file.name.toLowerCase().endsWith('.zip');
+
+                if (isZip) {
+                    const reader = new FileReader();
+                    reader.onload = function(e) {
+                        try {
+                            const zip = new JSZip();
+                            zip.loadAsync(e.target.result).then(function(zipObj) {
+                                const gpxEntries = zipObj.filter((relPath, file) =>
+                                    relPath.toLowerCase().endsWith('.gpx') || relPath.toLowerCase().endsWith(
+                                        '.xml')
+                                );
+                                if (gpxEntries.length === 0) {
+                                    console.warn(`⚠️ В ZIP нет GPX-файлов: ${file.name}`);
+                                    processedCount++;
+                                    updateProgress();
+                                    processNextInQueue();
+                                    return;
+                                }
+                                let processedInZip = 0;
+                                gpxEntries.forEach((relPath, file) => {
+                                    file.async('text').then(function(content) {
+                                        const points = parseGPX(content);
+                                        if (points.length > 0) {
+                                            const name = relPath.replace(/^.*[\\\/]/, '').replace(
+                                                /\.[^.]+$/, '');
+                                            addTrack(name, points);
+                                        }
+                                        processedInZip++;
+                                        if (processedInZip === gpxEntries.length) {
+                                            processedCount++;
+                                            updateProgress();
+                                            processNextInQueue();
+                                        }
+                                    }).catch(() => {
+                                        processedInZip++;
+                                        if (processedInZip === gpxEntries.length) {
+                                            processedCount++;
+                                            updateProgress();
+                                            processNextInQueue();
+                                        }
+                                    });
+                                });
+                            }).catch(() => {
+                                processedCount++;
+                                updateProgress();
+                                processNextInQueue();
+                            });
+                        } catch (_) {
+                            processedCount++;
+                            updateProgress();
+                            processNextInQueue();
+                        }
+                    };
+                    reader.readAsArrayBuffer(file);
+                } else {
+                    const reader = new FileReader();
+                    reader.onload = function(e) {
+                        const points = parseGPX(e.target.result);
+                        if (points.length > 0) {
+                            const name = file.name.replace(/\.[^.]+$/, '');
+                            addTrack(name, points);
+                        }
+                        processedCount++;
+                        updateProgress();
+                        processNextInQueue();
+                    };
+                    reader.onerror = function() {
+                        processedCount++;
+                        updateProgress();
+                        processNextInQueue();
+                    };
+                    reader.readAsText(file);
+                }
+            }
+
+            function updateProgress() {
+                const pct = Math.min(100, Math.round((processedCount / totalFilesCount) * 100));
+                progressFill.style.width = pct + '%';
+                progressLabel.textContent = `${processedCount} / ${totalFilesCount} файлов`;
+            }
+
+            // ----- Автоматическая загрузка GPX из папки tracks/ -----
+            async function loadGpxFromTracks() {
+                try {
+                    const apiUrl = 'https://api.github.com/repos/nvkff/heatmap/contents/tracks';
+                    const response = await fetch(apiUrl);
+                    if (response.ok) {
+                        const files = await response.json();
+                        const gpxFiles = files.filter(f =>
+                            f.name.toLowerCase().endsWith('.gpx') ||
+                            f.name.toLowerCase().endsWith('.xml')
+                        );
+                        console.log(`🔍 Найдено GPX-файлов: ${gpxFiles.length}`);
+                        if (gpxFiles.length > 0) {
+                            const fileObjects = [];
+                            for (const file of gpxFiles) {
+                                const resp = await fetch(file.download_url);
+                                if (resp.ok) {
+                                    const blob = await resp.blob();
+                                    fileObjects.push(new File([blob], file.name, { type: 'text/xml' }));
+                                }
+                            }
+                            if (fileObjects.length > 0) {
+                                processFiles(fileObjects);
+                            }
+                        }
+                        return;
+                    }
+                } catch (e) {
+                    console.warn('GitHub API не доступен, пробуем HTML-парсинг');
+                }
+
+                // Fallback
+                try {
+                    const response = await fetch('/heatmap/tracks/');
+                    if (!response.ok) return;
+                    const html = await response.text();
+                    const parser = new DOMParser();
+                    const doc = parser.parseFromString(html, 'text/html');
+                    const links = doc.querySelectorAll('a');
+                    const baseUrl = window.location.origin + '/heatmap/tracks/';
+                    const fileObjects = [];
+
+                    for (const link of links) {
+                        const href = link.getAttribute('href');
+                        if (!href) continue;
+                        const fileName = decodeURIComponent(href);
+                        if (fileName.endsWith('.gpx') || fileName.endsWith('.xml')) {
+                            const resp = await fetch(baseUrl + fileName);
+                            if (resp.ok) {
+                                const blob = await resp.blob();
+                                fileObjects.push(new File([blob], fileName, { type: 'text/xml' }));
+                            }
+                        }
+                    }
+                    if (fileObjects.length > 0) {
+                        processFiles(fileObjects);
+                    }
+                } catch (e) {
+                    console.warn('Не удалось загрузить файлы:', e);
+                }
+            }
+
+            // ----- События -----
+            btnLoad.addEventListener('click', () => fileInput.click());
+
+            fileInput.addEventListener('change', function() {
+                if (this.files.length > 0) processFiles(this.files);
+                this.value = '';
+            });
+
+            dropZone.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                dropZone.classList.add('dragover');
+            });
+            dropZone.addEventListener('dragleave', () => {
+                dropZone.classList.remove('dragover');
+            });
+            dropZone.addEventListener('drop', (e) => {
+                e.preventDefault();
+                dropZone.classList.remove('dragover');
+                if (e.dataTransfer.files.length > 0) processFiles(e.dataTransfer.files);
+            });
+            dropZone.addEventListener('click', () => fileInput.click());
+
+            btnClear.addEventListener('click', clearAll);
+            btnFit.addEventListener('click', fitAll);
+            btnExport.addEventListener('click', exportZip);
+
+            searchInput.addEventListener('input', renderFileList);
+
+            document.addEventListener('keydown', (e) => {
+                if ((e.metaKey || e.ctrlKey) && e.key === 'o') {
+                    e.preventDefault();
+                    fileInput.click();
+                }
+            });
+
+            // ----- Инициализация -----
+            setMode('tracks');
+            renderFileList();
+
+            setTimeout(loadGpxFromTracks, 500);
+        })();
+    </script>
+</body>
+</html>
