@@ -19,7 +19,7 @@
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" />
 
     <style>
-        /* (стили те же, что в старой рабочей версии) */
+        /* (стили те же, оставлю без изменений) */
         * {
             margin: 0;
             padding: 0;
@@ -454,6 +454,7 @@
 
     <div id="map"></div>
 
+    <!-- Панель -->
     <div id="panel">
         <div class="panel-header">
             <h1><i class="fas fa-fire"></i> <span>Тепловая карта</span></h1>
@@ -504,6 +505,7 @@
         </div>
     </div>
 
+    <!-- Переключатель слоёв -->
     <div class="layer-toggle" id="layerToggle">
         <button data-layer="streets" class="active"><i class="fas fa-road"></i></button>
         <button data-layer="satellite"><i class="fas fa-satellite"></i></button>
@@ -525,8 +527,8 @@
 
             const state = window._state;
 
-            // ----- НАСТРОЙКИ (оптимизированные) -----
-            const REBUILD_INTERVAL = 30; // было 10 → стало 30
+            // ----- НАСТРОЙКИ ОПТИМИЗАЦИИ -----
+            const REBUILD_INTERVAL = 30; // было 10 → стало 30 (в 3 раза меньше перерисовок)
             const HEAT_RADIUS = 20; // было 24 → стало 20
             const HEAT_BLUR = 12; // было 15 → стало 12
 
